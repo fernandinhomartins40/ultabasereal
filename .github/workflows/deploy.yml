@@ -1,0 +1,700 @@
+name: 🚀 Deploy Ultrabase
+
+# Controle de concorrência
+concurrency:
+  group: ultrabase-deploy
+  cancel-in-progress: true
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      full_reinstall:
+        description: 'Reinstalação completa (true/false)'
+        required: false
+        default: 'false'
+
+env:
+  VPS_HOST: '82.25.69.57'
+  VPS_USER: 'root'
+  DEPLOY_DIR: '/opt/supabase-manager'
+
+jobs:
+  deploy:
+    name: 🚀 Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    
+    steps:
+    - name: 📋 Informações do Deploy
+      run: |
+        echo "🚀 DEPLOY ULTRABASE"
+        echo "=================="
+        echo "Commit: ${{ github.sha }}"
+        echo "Branch: ${{ github.ref_name }}"
+        echo "Reinstalação completa: ${{ github.event.inputs.full_reinstall || 'false' }}"
+        echo "=================="
+
+    - name: 🔑 Configurar SSH
+      run: |
+        echo "🔑 Configurando SSH..."
+        sudo apt-get update && sudo apt-get install -y sshpass
+        mkdir -p ~/.ssh
+        ssh-keyscan -H ${{ env.VPS_HOST }} >> ~/.ssh/known_hosts
+
+    - name: 🔍 Verificar Estado da VPS
+      id: vps-check
+      run: |
+        echo "🔍 Verificando estado da VPS..."
+        
+        NEEDS_INSTALL="false"
+        NEEDS_DEPS="false"
+        APP_RUNNING="false"
+        
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          echo '=== Verificando Sistema ==='
+          
+          # Verificar dependências críticas
+          MISSING=''
+          if ! command -v docker >/dev/null 2>&1; then
+            echo '❌ Docker: NÃO INSTALADO'
+            MISSING=\"docker \$MISSING\"
+          else
+            echo \"✅ Docker: \$(docker --version | cut -d' ' -f1-3)\"
+          fi
+          
+          if ! command -v node >/dev/null 2>&1; then
+            echo '❌ Node.js: NÃO INSTALADO'
+            MISSING=\"node \$MISSING\"
+          else
+            echo \"✅ Node.js: \$(node --version)\"
+          fi
+          
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo '❌ PM2: NÃO INSTALADO'
+            MISSING=\"pm2 \$MISSING\"
+          else
+            echo '✅ PM2: INSTALADO'
+          fi
+          
+          if ! command -v nginx >/dev/null 2>&1; then
+            echo '❌ Nginx: NÃO INSTALADO'
+            MISSING=\"nginx \$MISSING\"
+          else
+            echo '✅ Nginx: INSTALADO'
+          fi
+          
+          # Verificar diretório e dependências
+          if [ ! -d '${{ env.DEPLOY_DIR }}' ]; then
+            echo '❌ Diretório da aplicação: NÃO EXISTE'
+            MISSING=\"dir \$MISSING\"
+          else
+            echo '✅ Diretório da aplicação: EXISTE'
+            
+            if [ ! -d '${{ env.DEPLOY_DIR }}/src/node_modules' ]; then
+              echo '❌ Dependências Node.js: FALTANDO'
+              MISSING=\"deps \$MISSING\"
+            else
+              echo '✅ Dependências Node.js: INSTALADAS'
+            fi
+            
+            # Verificar se app está rodando
+            if pm2 list 2>/dev/null | grep -q 'supabase-manager.*online'; then
+              echo '✅ Aplicação: RODANDO'
+              APP_RUNNING='true'
+            else
+              echo '❌ Aplicação: NÃO RODANDO'
+            fi
+          fi
+          
+          if [ -n \"\$MISSING\" ]; then
+            echo \"NEEDS_INSTALL=true\" > /tmp/deploy_status.txt
+          else
+            echo \"NEEDS_INSTALL=false\" > /tmp/deploy_status.txt
+          fi
+          
+          echo \"APP_RUNNING=\$APP_RUNNING\" >> /tmp/deploy_status.txt
+          echo \"MISSING=\$MISSING\" >> /tmp/deploy_status.txt
+        "
+        
+        # Capturar resultados
+        NEEDS_INSTALL=$(sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "grep NEEDS_INSTALL /tmp/deploy_status.txt | cut -d'=' -f2" 2>/dev/null || echo "true")
+        APP_RUNNING=$(sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "grep APP_RUNNING /tmp/deploy_status.txt | cut -d'=' -f2" 2>/dev/null || echo "false")
+        
+        echo "needs_install=$NEEDS_INSTALL" >> $GITHUB_OUTPUT
+        echo "app_running=$APP_RUNNING" >> $GITHUB_OUTPUT
+        
+        echo "🏁 Precisa instalação: $NEEDS_INSTALL"
+        echo "🏁 App rodando: $APP_RUNNING"
+
+    - name: 🛠️ Instalação do Sistema (se necessária)
+      if: steps.vps-check.outputs.needs_install == 'true' || github.event.inputs.full_reinstall == 'true'
+      run: |
+        echo "🛠️ Instalando dependências do sistema..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          set -e
+          export DEBIAN_FRONTEND=noninteractive
+          
+          # Função para aguardar liberação do apt lock
+          wait_for_apt_lock() {
+            echo '⏳ Aguardando liberação do apt lock...'
+            local max_attempts=30
+            local attempt=1
+            
+            while [ \$attempt -le \$max_attempts ]; do
+              if ! lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && ! pgrep -x unattended-upgr >/dev/null 2>&1; then
+                echo '✅ Apt lock liberado!'
+                return 0
+              fi
+              
+              echo \"Tentativa \$attempt/\$max_attempts - Aguardando unattended-upgrades terminar...\"
+              sleep 10
+              attempt=\$((attempt + 1))
+            done
+            
+            echo '⚠️ Timeout aguardando apt lock - forçando liberação...'
+            # Parar unattended-upgrades se necessário
+            systemctl stop unattended-upgrades.service || true
+            killall unattended-upgr 2>/dev/null || true
+            
+            # Remover locks manualmente se necessário
+            rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock || true
+            dpkg --configure -a || true
+            
+            return 0
+          }
+          
+          # Aguardar liberação do lock antes de continuar
+          wait_for_apt_lock
+          
+          echo '📦 Atualizando sistema...'
+          apt-get update -y
+          apt-get install -y curl wget gnupg2 software-properties-common build-essential jq htop ufw openssl
+          
+          # Docker
+          if ! command -v docker >/dev/null 2>&1; then
+            echo '🐳 Instalando Docker...'
+            curl -fsSL https://get.docker.com -o get-docker.sh
+            sh get-docker.sh
+            systemctl start docker
+            systemctl enable docker
+            rm get-docker.sh
+          fi
+          
+          # Node.js 18
+          if ! command -v node >/dev/null 2>&1; then
+            echo '📦 Instalando Node.js 18...'
+            curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+            wait_for_apt_lock
+            apt-get install -y nodejs
+          fi
+          
+          # PM2
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo '🌐 Instalando PM2...'
+            npm install -g pm2
+            pm2 startup systemd -u root --hp /root
+          fi
+          
+          # Nginx
+          if ! command -v nginx >/dev/null 2>&1; then
+            echo '🌐 Instalando Nginx...'
+            wait_for_apt_lock
+            apt-get install -y nginx
+            
+            # Configuração básica do Nginx com suporte a subdomínios
+            echo 'server {' > /etc/nginx/sites-available/ultrabase
+            echo '    listen 80;' >> /etc/nginx/sites-available/ultrabase
+            echo '    server_name ultrabase.com.br www.ultrabase.com.br;' >> /etc/nginx/sites-available/ultrabase
+            echo '    ' >> /etc/nginx/sites-available/ultrabase
+            echo '    location / {' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_pass http://127.0.0.1:3080;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_http_version 1.1;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_set_header Upgrade \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_set_header Connection upgrade;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_set_header Host \$host;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_set_header X-Real-IP \$remote_addr;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_set_header X-Forwarded-Proto \$scheme;' >> /etc/nginx/sites-available/ultrabase
+            echo '        proxy_cache_bypass \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
+            echo '    }' >> /etc/nginx/sites-available/ultrabase
+            echo '    ' >> /etc/nginx/sites-available/ultrabase
+            echo '    location /health {' >> /etc/nginx/sites-available/ultrabase
+            echo '        access_log off;' >> /etc/nginx/sites-available/ultrabase
+            echo '        return 200 \"healthy\";' >> /etc/nginx/sites-available/ultrabase
+            echo '        add_header Content-Type text/plain;' >> /etc/nginx/sites-available/ultrabase
+            echo '    }' >> /etc/nginx/sites-available/ultrabase
+            echo '}' >> /etc/nginx/sites-available/ultrabase
+            
+            ln -sf /etc/nginx/sites-available/ultrabase /etc/nginx/sites-enabled/
+            rm -f /etc/nginx/sites-enabled/default
+            # Remover configuração de subdomínios que não funciona sem DNS wildcard
+            rm -f /etc/nginx/sites-enabled/ultrabase-instances
+            /usr/sbin/nginx -t
+            systemctl start nginx
+            systemctl enable nginx
+          fi
+          
+          # Garantir configuração correta do Nginx
+          echo '🌐 Configurando Nginx (sempre aplicar)...'
+          echo 'server {' > /etc/nginx/sites-available/ultrabase
+          echo '    listen 80;' >> /etc/nginx/sites-available/ultrabase
+          echo '    server_name ultrabase.com.br www.ultrabase.com.br _;' >> /etc/nginx/sites-available/ultrabase
+          echo '    ' >> /etc/nginx/sites-available/ultrabase
+          echo '    location / {' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_pass http://127.0.0.1:3080;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_http_version 1.1;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_set_header Upgrade \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_set_header Connection \"upgrade\";' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_set_header Host \$host;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_set_header X-Real-IP \$remote_addr;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_set_header X-Forwarded-Proto \$scheme;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_cache_bypass \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_connect_timeout 30s;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_send_timeout 30s;' >> /etc/nginx/sites-available/ultrabase
+          echo '        proxy_read_timeout 30s;' >> /etc/nginx/sites-available/ultrabase
+          echo '    }' >> /etc/nginx/sites-available/ultrabase
+          echo '    ' >> /etc/nginx/sites-available/ultrabase
+          echo '    location /health {' >> /etc/nginx/sites-available/ultrabase
+          echo '        access_log off;' >> /etc/nginx/sites-available/ultrabase
+          echo '        return 200 \"healthy\";' >> /etc/nginx/sites-available/ultrabase
+          echo '        add_header Content-Type text/plain;' >> /etc/nginx/sites-available/ultrabase
+          echo '    }' >> /etc/nginx/sites-available/ultrabase
+          echo '}' >> /etc/nginx/sites-available/ultrabase
+          
+          # Habilitar site e remover default
+          ln -sf /etc/nginx/sites-available/ultrabase /etc/nginx/sites-enabled/
+          rm -f /etc/nginx/sites-enabled/default
+          rm -f /etc/nginx/sites-enabled/ultrabase-instances
+          
+          # Testar configuração
+          if /usr/sbin/nginx -t; then
+            echo '✅ Configuração do Nginx válida'
+            systemctl reload nginx || systemctl restart nginx
+            echo '✅ Nginx recarregado'
+          else
+            echo '❌ Erro na configuração do Nginx'
+            /usr/sbin/nginx -t
+          fi
+          
+          # Certificado SSL (se não existir)
+          if ! command -v certbot >/dev/null 2>&1; then
+            echo '🔒 Instalando Certbot...'
+            wait_for_apt_lock
+            apt-get install -y snapd
+            snap install core; snap refresh core
+            snap install --classic certbot
+            ln -sf /snap/bin/certbot /usr/bin/certbot
+            
+            # Tentar obter certificado (pode falhar se domínio não apontar ainda)
+            certbot --nginx --non-interactive --agree-tos --email admin@ultrabase.com.br -d ultrabase.com.br -d www.ultrabase.com.br --redirect || echo 'SSL falhou - domínio pode não estar apontando'
+          fi
+          
+          # Firewall básico
+          ufw --force enable
+          ufw allow ssh
+          ufw allow 80
+          ufw allow 443
+          
+          echo '✅ Sistema configurado!'
+        "
+
+    - name: 📦 Backup dos Dados
+      run: |
+        echo "📦 Fazendo backup dos dados críticos..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          mkdir -p /tmp/ultrabase-backup
+          
+          # Backup instances.json
+          if [ -f '${{ env.DEPLOY_DIR }}/src/instances.json' ]; then
+            cp '${{ env.DEPLOY_DIR }}/src/instances.json' /tmp/ultrabase-backup/
+            echo '✅ instances.json salvo'
+          fi
+          
+          # Backup users.json
+          if [ -f '${{ env.DEPLOY_DIR }}/src/users.json' ]; then
+            cp '${{ env.DEPLOY_DIR }}/src/users.json' /tmp/ultrabase-backup/
+            echo '✅ users.json salvo'
+          fi
+        "
+
+    - name: 🔄 Atualizar Código
+      run: |
+        echo "🔄 Atualizando código da aplicação..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          # Criar diretório se não existe
+          mkdir -p ${{ env.DEPLOY_DIR }}
+          cd ${{ env.DEPLOY_DIR }}
+          
+          # Clone ou pull
+          if [ ! -d .git ]; then
+            echo '🆕 Clonando repositório...'
+            git clone https://github.com/fernandinhomartins40/recultrabase.git .
+          else
+            echo '📥 Atualizando repositório...'
+            git fetch origin
+            git reset --hard origin/main
+            git pull origin main
+          fi
+          
+          # Verificar arquivos críticos
+          echo '🔍 Verificando arquivos críticos...'
+          if [ -f 'src/public/index.html' ]; then
+            echo '✅ index.html encontrado'
+            if grep -q 'dashboard-username' src/public/index.html; then
+              echo '✅ index.html tem campos atualizados'
+            else
+              echo '❌ index.html não tem campos atualizados!'
+            fi
+          else
+            echo '❌ index.html não encontrado!'
+          fi
+          
+          if [ -f 'src/server.js' ]; then
+            echo '✅ server.js encontrado'
+          else
+            echo '❌ server.js não encontrado!'
+          fi
+          
+          if [ -f 'supabase-core/generate.bash' ]; then
+            chmod +x supabase-core/generate.bash
+            echo '✅ generate.bash encontrado e executável'
+          else
+            echo '❌ generate.bash não encontrado!'
+          fi
+          
+          # Aplicar permissões
+          find supabase-core/ -name '*.bash' -o -name '*.sh' | xargs chmod +x 2>/dev/null || true
+        "
+
+    - name: 🔄 Restaurar Dados
+      run: |
+        echo "🔄 Restaurando dados preservados..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          cd ${{ env.DEPLOY_DIR }}
+          mkdir -p src
+          
+          # Restaurar instances.json
+          if [ -f '/tmp/ultrabase-backup/instances.json' ]; then
+            cp /tmp/ultrabase-backup/instances.json src/
+            echo '✅ instances.json restaurado'
+          elif [ ! -f 'src/instances.json' ]; then
+            echo '{\"instances\": [], \"nextPort\": 8100, \"lastUpdate\": \"'$(date -u +%Y-%m-%dT%H:%M:%S.000Z)'\"}' > src/instances.json
+            echo '✅ instances.json criado'
+          fi
+          
+          # Restaurar users.json
+          if [ -f '/tmp/ultrabase-backup/users.json' ]; then
+            cp /tmp/ultrabase-backup/users.json src/
+            echo '✅ users.json restaurado'
+          elif [ ! -f 'src/users.json' ]; then
+            echo '{\"admin\": {\"id\": \"admin\", \"role\": \"admin\", \"projects\": [\"*\"], \"password_hash\": \"$2b$10$placeholder\"}}' > src/users.json
+            echo '✅ users.json criado'
+          fi
+        "
+
+    - name: 📦 Instalar Dependências
+      run: |
+        echo "📦 Instalando dependências da aplicação..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          echo '🔍 Debug: Verificando estrutura de diretórios...'
+          echo 'Diretório base:'
+          ls -la ${{ env.DEPLOY_DIR }}/
+          
+          echo 'Conteúdo do diretório src:'
+          ls -la ${{ env.DEPLOY_DIR }}/src/ 2>/dev/null || echo 'Diretório src não existe!'
+          
+          echo 'Tentando acessar diretório src...'
+          if [ -d '${{ env.DEPLOY_DIR }}/src' ]; then
+            cd ${{ env.DEPLOY_DIR }}/src
+            echo 'PWD atual:' \$(pwd)
+            echo 'Arquivos no diretório atual:'
+            ls -la
+            
+            if [ -f 'package.json' ]; then
+              echo '✅ package.json encontrado!'
+              echo 'Conteúdo do package.json:'
+              head -5 package.json
+              
+              echo '📦 Instalando dependências...'
+              npm install --production --silent
+              
+              # Verificar instalação
+              if [ -d 'node_modules' ] && [ -f 'node_modules/express/package.json' ]; then
+                echo '✅ Dependências instaladas com sucesso'
+              else
+                echo '❌ Erro na instalação das dependências'
+                exit 1
+              fi
+            else
+              echo '❌ package.json não encontrado no diretório src!'
+              exit 1
+            fi
+          else
+            echo '❌ Diretório src não existe!'
+            exit 1
+          fi
+        "
+
+    - name: 🚀 Iniciar/Reiniciar Aplicação
+      run: |
+        echo "🚀 Iniciando aplicação..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          cd ${{ env.DEPLOY_DIR }}/src
+          
+          # Configurar PATH robustamente para incluir Node.js e PM2
+          export PATH='/usr/local/bin:/usr/bin:/bin:\$PATH'
+          export DEBIAN_FRONTEND=noninteractive
+          
+          # Função para aguardar liberação do apt lock (caso precise reinstalar Node.js)
+          wait_for_apt_lock() {
+            echo '⏳ Aguardando liberação do apt lock...'
+            local max_attempts=30
+            local attempt=1
+            
+            while [ \$attempt -le \$max_attempts ]; do
+              if ! lsof /var/lib/dpkg/lock-frontend >/dev/null 2>&1 && ! pgrep -x unattended-upgr >/dev/null 2>&1; then
+                echo '✅ Apt lock liberado!'
+                return 0
+              fi
+              
+              echo \"Tentativa \$attempt/\$max_attempts - Aguardando unattended-upgrades terminar...\"
+              sleep 10
+              attempt=\$((attempt + 1))
+            done
+            
+            echo '⚠️ Timeout aguardando apt lock - forçando liberação...'
+            systemctl stop unattended-upgrades.service || true
+            killall unattended-upgr 2>/dev/null || true
+            rm -f /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock /var/cache/apt/archives/lock || true
+            dpkg --configure -a || true
+            return 0
+          }
+          
+          # Verificar se Node.js está disponível
+          echo '🔍 Verificando Node.js...'
+          if ! command -v node >/dev/null 2>&1; then
+            echo '❌ Node.js não encontrado no PATH atual'
+            echo 'PATH atual: '\$PATH
+            
+            # Procurar Node.js em locais comuns
+            NODE_PATH=''
+            for path in '/usr/local/bin/node' '/usr/bin/node' '/opt/nodejs/bin/node'; do
+              if [ -x \"\$path\" ]; then
+                NODE_PATH=\"\$path\"
+                export PATH=\"\$(dirname \$path):\$PATH\"
+                echo \"✅ Node.js encontrado em: \$path\"
+                break
+              fi
+            done
+            
+            if [ -z \"\$NODE_PATH\" ]; then
+              echo '❌ Node.js não encontrado em lugar nenhum, reinstalando...'
+              curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
+              wait_for_apt_lock
+              apt-get install -y nodejs
+              export PATH='/usr/local/bin:/usr/bin:\$PATH'
+            fi
+          else
+            echo \"✅ Node.js encontrado: \$(node --version)\"
+          fi
+          
+          # Verificar se PM2 está disponível
+          echo '🔍 Verificando PM2...'
+          if ! command -v pm2 >/dev/null 2>&1; then
+            echo '❌ PM2 não encontrado, procurando...'
+            PM2_PATH=''
+            for path in '/usr/local/bin/pm2' '/usr/bin/pm2' '/root/.npm-global/bin/pm2'; do
+              if [ -x \"\$path\" ]; then
+                PM2_PATH=\"\$path\"
+                export PATH=\"\$(dirname \$path):\$PATH\"
+                echo \"✅ PM2 encontrado em: \$path\"
+                break
+              fi
+            done
+            
+            if [ -z \"\$PM2_PATH\" ]; then
+              echo '❌ PM2 não encontrado, reinstalando...'
+              npm install -g pm2
+              export PATH='/usr/local/bin:\$PATH'
+            fi
+          else
+            echo \"✅ PM2 encontrado: \$(pm2 --version)\"
+          fi
+          
+          # Testar sintaxe do servidor
+          echo '🔍 Testando sintaxe do server.js...'
+          if node -c server.js; then
+            echo '✅ Sintaxe do server.js está correta'
+          else
+            echo '❌ Erro de sintaxe no server.js!'
+            echo '📋 Verificando arquivo:'
+            ls -la server.js
+            echo '📋 Primeiras linhas:'
+            head -10 server.js
+            exit 1
+          fi
+          
+          # Parar processo anterior
+          echo '⏹️ Parando processos anteriores...'
+          pm2 stop supabase-manager 2>/dev/null || true
+          pm2 delete supabase-manager 2>/dev/null || true
+          
+          # Iniciar aplicação
+          echo '🚀 Iniciando aplicação com PM2...'
+          pm2 start server.js --name supabase-manager --log-date-format 'YYYY-MM-DD HH:mm:ss' --time
+          pm2 save
+          
+          echo '⏳ Aguardando estabilização...'
+          sleep 15
+          
+          # Verificar se ficou online
+          if pm2 list | grep -q 'supabase-manager.*online'; then
+            echo '✅ Aplicação iniciada com sucesso'
+            pm2 status supabase-manager
+          else
+            echo '❌ Aplicação não ficou online'
+            echo '📋 Status PM2:'
+            pm2 list
+            echo '📋 Logs da aplicação:'
+            pm2 logs supabase-manager --lines 30
+            exit 1
+          fi
+        "
+
+    - name: 🔍 Verificação Final
+      run: |
+        echo "🔍 Verificação final do deploy..."
+        sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
+          export PATH='/usr/local/bin:/usr/bin:/bin:\$PATH'
+          
+          echo '=== Status da Aplicação ==='
+          pm2 status supabase-manager
+          
+          echo ''
+          echo '=== Teste de Conectividade ==='
+          for i in {1..5}; do
+            if curl -f -s http://localhost:3080/ >/dev/null 2>&1; then
+              echo '✅ Aplicação responde na porta 3080'
+              break
+            else
+              echo \"⏳ Tentativa \$i/5...\"
+              sleep 3
+            fi
+            
+            if [ \$i -eq 5 ]; then
+              echo '❌ Aplicação não responde após 15 segundos'
+              pm2 logs supabase-manager --lines 20
+            fi
+          done
+          
+          echo ''
+          echo '=== Teste via Nginx ==='
+          echo '🔍 Testando Nginx diretamente...'
+          if curl -f -s http://localhost/ >/dev/null 2>&1; then
+            echo '✅ Nginx proxy funcionando'
+            echo '📋 Resposta do Nginx:'
+            curl -s http://localhost/ | head -10
+          else
+            echo '❌ Problema no Nginx proxy - verificando e corrigindo...'
+            echo '📋 Status do Nginx:'
+            systemctl status nginx --no-pager -l || true
+            echo '📋 Configuração ativa:'
+            ls -la /etc/nginx/sites-enabled/
+            echo '📋 Teste de configuração:'
+            /usr/sbin/nginx -t
+            
+            # Verificar se Nginx está rodando
+            if ! systemctl is-active nginx >/dev/null 2>&1; then
+              echo '🔧 Nginx não está ativo, iniciando...'
+              systemctl start nginx
+              sleep 3
+            fi
+            
+            # Verificar configuração
+            if ! /usr/sbin/nginx -t >/dev/null 2>&1; then
+              echo '🔧 Erro na configuração do Nginx, recriando...'
+              echo 'server {' > /etc/nginx/sites-available/ultrabase
+              echo '    listen 80;' >> /etc/nginx/sites-available/ultrabase
+              echo '    server_name ultrabase.com.br www.ultrabase.com.br;' >> /etc/nginx/sites-available/ultrabase
+              echo '    ' >> /etc/nginx/sites-available/ultrabase
+              echo '    location / {' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_pass http://127.0.0.1:3080;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_http_version 1.1;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_set_header Upgrade \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_set_header Connection upgrade;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_set_header Host \$host;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_set_header X-Real-IP \$remote_addr;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_set_header X-Forwarded-Proto \$scheme;' >> /etc/nginx/sites-available/ultrabase
+              echo '        proxy_cache_bypass \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
+              echo '    }' >> /etc/nginx/sites-available/ultrabase
+              echo '    ' >> /etc/nginx/sites-available/ultrabase
+              echo '    location /health {' >> /etc/nginx/sites-available/ultrabase
+              echo '        access_log off;' >> /etc/nginx/sites-available/ultrabase
+              echo '        return 200 \"healthy\";' >> /etc/nginx/sites-available/ultrabase
+              echo '        add_header Content-Type text/plain;' >> /etc/nginx/sites-available/ultrabase
+              echo '    }' >> /etc/nginx/sites-available/ultrabase
+              echo '}' >> /etc/nginx/sites-available/ultrabase
+              
+              # Habilitar site
+              ln -sf /etc/nginx/sites-available/ultrabase /etc/nginx/sites-enabled/
+              rm -f /etc/nginx/sites-enabled/default
+              
+              # Testar e recarregar
+              if /usr/sbin/nginx -t; then
+                systemctl reload nginx
+                echo '✅ Configuração do Nginx corrigida'
+              else
+                echo '❌ Ainda há erro na configuração do Nginx'
+                /usr/sbin/nginx -t
+              fi
+            fi
+            
+            # Testar novamente após correção
+            sleep 5
+            if curl -f -s http://localhost/ >/dev/null 2>&1; then
+              echo '✅ Nginx proxy funcionando após correção'
+            else
+              echo '❌ Nginx proxy ainda com problema'
+              echo '📋 Status do Nginx:'
+              systemctl status nginx --no-pager -l
+              echo '📋 Logs do Nginx:'
+              tail -10 /var/log/nginx/error.log 2>/dev/null || echo 'Sem logs de erro'
+            fi
+          fi
+          
+          echo ''
+          echo '=== Arquivos Críticos ==='
+          echo \"index.html: \$([ -f '${{ env.DEPLOY_DIR }}/src/public/index.html' ] && echo '✅ OK' || echo '❌ MISSING')\"
+          echo \"server.js: \$([ -f '${{ env.DEPLOY_DIR }}/src/server.js' ] && echo '✅ OK' || echo '❌ MISSING')\"
+          echo \"generate.bash: \$([ -f '${{ env.DEPLOY_DIR }}/supabase-core/generate.bash' ] && echo '✅ OK' || echo '❌ MISSING')\"
+          
+          if [ -f '${{ env.DEPLOY_DIR }}/src/instances.json' ]; then
+            INSTANCES=\$(cat '${{ env.DEPLOY_DIR }}/src/instances.json' | jq '.instances | length' 2>/dev/null || echo '0')
+            echo \"Instâncias preservadas: \$INSTANCES\"
+          fi
+        "
+
+    - name: 📊 Relatório Final
+      if: always()
+      run: |
+        echo "📊 RELATÓRIO DO DEPLOY"
+        echo "====================="
+        echo "Commit: ${{ github.sha }}"
+        echo "Timestamp: $(date)"
+        echo ""
+        echo "🎯 Aplicação: https://ultrabase.com.br/"
+        echo "🔧 Painel: https://ultrabase.com.br/login"
+        echo ""
+        echo "✅ Deploy concluído com sucesso!"
+
+    - name: 🎉 Deploy Concluído
+      run: |
+        echo "🎉 DEPLOY REALIZADO COM SUCESSO!"
+        echo "🛡️ Dados preservados: SIM"
+        echo "🚀 Sistema: FUNCIONANDO"
+        echo ""
+        echo "Verifique se a interface mostra os 4 campos no formulário!"

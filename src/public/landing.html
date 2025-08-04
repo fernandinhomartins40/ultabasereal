@@ -1,0 +1,1071 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Ultrabase - Gerenciador de Instâncias Supabase</title>
+    <meta name="description" content="Crie e gerencie múltiplas instâncias Supabase com facilidade. Interface intuitiva, controles seguros e diagnósticos avançados.">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Lucide Icons -->
+    <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.js"></script>
+    <style>
+        /* CSS Variables */
+        :root {
+            --background: 0 0% 100%;
+            --foreground: 222.2 84% 4.9%;
+            --card: 0 0% 100%;
+            --border: 214.3 31.8% 91.4%;
+            --muted: 210 40% 96%;
+            --muted-foreground: 215.4 16.3% 46.9%;
+            --brand-primary: 30 100% 50%; /* Orange */
+            --success: 142 76% 36%; /* Green */
+            --surface-100: 210 40% 98%;
+            --surface-200: 214.3 31.8% 91.4%;
+        }
+
+        .dark {
+            --background: 0 0% 8%;
+            --foreground: 0 0% 98%;
+            --card: 0 0% 12%;
+            --border: 0 0% 20%;
+            --muted: 0 0% 16%;
+            --muted-foreground: 0 0% 65%;
+            --brand-primary: 30 100% 50%;
+            --success: 142 71% 45%;
+            --surface-100: 0 0% 12%;
+            --surface-200: 0 0% 20%;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        html, body {
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: hsl(var(--background));
+            color: hsl(var(--foreground));
+            line-height: 1.6;
+            scroll-behavior: smooth;
+        }
+
+        /* Header */
+        .header {
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            background: hsl(var(--background) / 0.95);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid hsl(var(--border));
+            z-index: 1000;
+            padding: 1rem 0;
+        }
+
+        .header-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .logo {
+            height: 40px;
+            width: auto;
+        }
+
+        .header-actions {
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+
+        .theme-toggle {
+            background: hsl(var(--surface-100));
+            border: 1px solid hsl(var(--border));
+            border-radius: 6px;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            color: hsl(var(--muted-foreground));
+        }
+
+        .theme-toggle:hover {
+            background: hsl(var(--surface-200));
+            color: hsl(var(--foreground));
+        }
+
+        .cta-btn {
+            background: hsl(var(--brand-primary));
+            color: white;
+            border: none;
+            padding: 0.625rem 1.5rem;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.5rem;
+            font-size: 0.875rem;
+        }
+
+        .cta-btn:hover {
+            background: hsl(var(--brand-primary) / 0.9);
+            transform: translateY(-1px);
+        }
+
+        /* Main Content */
+        .main {
+            padding-top: 80px;
+        }
+
+        .hero {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 4rem 2rem;
+            text-align: center;
+        }
+
+        .hero-title {
+            font-size: clamp(2.5rem, 5vw, 4rem);
+            font-weight: 800;
+            margin: 0 0 1rem;
+            background: linear-gradient(135deg, hsl(var(--foreground)), hsl(var(--brand-primary)));
+            background-clip: text;
+            -webkit-background-clip: text;
+            color: transparent;
+            line-height: 1.1;
+        }
+
+        .hero-subtitle {
+            font-size: 1.25rem;
+            color: hsl(var(--muted-foreground));
+            margin: 0 0 2rem;
+            max-width: 600px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        .hero-cta {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            align-items: center;
+            flex-wrap: wrap;
+            margin-bottom: 3rem;
+        }
+
+        .btn-primary {
+            background: hsl(var(--brand-primary));
+            color: white;
+            border: none;
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn-primary:hover {
+            background: hsl(var(--brand-primary) / 0.9);
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px hsl(var(--brand-primary) / 0.3);
+        }
+
+        .btn-secondary {
+            background: transparent;
+            color: hsl(var(--foreground));
+            border: 1px solid hsl(var(--border));
+            padding: 1rem 2rem;
+            border-radius: 8px;
+            font-weight: 600;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-decoration: none;
+            display: inline-flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .btn-secondary:hover {
+            background: hsl(var(--surface-100));
+            transform: translateY(-2px);
+        }
+
+        /* Features */
+        .features {
+            background: hsl(var(--surface-100));
+            padding: 4rem 0;
+        }
+
+        .features-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .section-title {
+            text-align: center;
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin: 0 0 3rem;
+        }
+
+        .features-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-bottom: 4rem;
+        }
+
+        .feature-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: center;
+            transition: all 0.2s ease;
+        }
+
+        .feature-card:hover {
+            transform: translateY(-4px);
+            box-shadow: 0 20px 25px -5px hsl(var(--foreground) / 0.1);
+        }
+
+        .feature-icon {
+            width: 48px;
+            height: 48px;
+            background: hsl(var(--brand-primary) / 0.1);
+            color: hsl(var(--brand-primary));
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 1rem;
+        }
+
+        .feature-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0 0 0.5rem;
+        }
+
+        .feature-description {
+            color: hsl(var(--muted-foreground));
+            margin: 0;
+        }
+
+        /* Benefits Section */
+        .benefits {
+            padding: 4rem 0;
+        }
+
+        .benefits-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .benefits-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 3rem;
+            margin-top: 3rem;
+        }
+
+        .benefit-item {
+            display: flex;
+            align-items: flex-start;
+            gap: 1rem;
+        }
+
+        .benefit-icon {
+            width: 24px;
+            height: 24px;
+            color: hsl(var(--brand-primary));
+            flex-shrink: 0;
+            margin-top: 0.25rem;
+        }
+
+        .benefit-content h3 {
+            font-size: 1.125rem;
+            font-weight: 600;
+            margin: 0 0 0.5rem;
+        }
+
+        .benefit-content p {
+            color: hsl(var(--muted-foreground));
+            margin: 0;
+        }
+
+        /* Use Cases Section */
+        .use-cases {
+            background: hsl(var(--surface-100));
+            padding: 4rem 0;
+        }
+
+        .use-cases-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .use-cases-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        .use-case-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: 12px;
+            padding: 2rem;
+            transition: all 0.2s ease;
+        }
+
+        .use-case-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -5px hsl(var(--foreground) / 0.1);
+        }
+
+        .use-case-title {
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin: 0 0 1rem;
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .use-case-icon {
+            width: 20px;
+            height: 20px;
+            color: hsl(var(--brand-primary));
+        }
+
+        .use-case-description {
+            color: hsl(var(--muted-foreground));
+            margin: 0 0 1rem;
+        }
+
+        .use-case-features {
+            list-style: none;
+            padding: 0;
+            margin: 0;
+        }
+
+        .use-case-features li {
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            margin-bottom: 0.5rem;
+            font-size: 0.875rem;
+            color: hsl(var(--muted-foreground));
+        }
+
+        .use-case-features li:before {
+            content: "✓";
+            color: hsl(var(--success));
+            font-weight: bold;
+        }
+
+        /* Testimonials Section */
+        .testimonials {
+            padding: 4rem 0;
+        }
+
+        .testimonials-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .testimonials-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 2rem;
+            margin-top: 3rem;
+        }
+
+        .testimonial-card {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: 12px;
+            padding: 2rem;
+            text-align: left;
+            transition: all 0.2s ease;
+        }
+
+        .testimonial-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 25px -5px hsl(var(--foreground) / 0.1);
+        }
+
+        .testimonial-quote {
+            color: hsl(var(--muted-foreground));
+            font-style: italic;
+            margin: 0 0 1.5rem;
+            font-size: 1.125rem;
+            line-height: 1.7;
+        }
+
+        .testimonial-author {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .testimonial-avatar {
+            width: 40px;
+            height: 40px;
+            background: hsl(var(--brand-primary) / 0.1);
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: hsl(var(--brand-primary));
+            font-weight: 600;
+        }
+
+        .testimonial-info h4 {
+            margin: 0;
+            font-size: 0.875rem;
+            font-weight: 600;
+        }
+
+        .testimonial-info p {
+            margin: 0;
+            font-size: 0.75rem;
+            color: hsl(var(--muted-foreground));
+        }
+
+        /* FAQ Section */
+        .faq {
+            background: hsl(var(--surface-100));
+            padding: 4rem 0;
+        }
+
+        .faq-content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .faq-list {
+            margin-top: 3rem;
+        }
+
+        .faq-item {
+            background: hsl(var(--card));
+            border: 1px solid hsl(var(--border));
+            border-radius: 8px;
+            margin-bottom: 1rem;
+            overflow: hidden;
+        }
+
+        .faq-question {
+            width: 100%;
+            padding: 1.5rem;
+            background: none;
+            border: none;
+            text-align: left;
+            font-size: 1rem;
+            font-weight: 600;
+            color: hsl(var(--foreground));
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: all 0.2s ease;
+        }
+
+        .faq-question:hover {
+            background: hsl(var(--surface-100));
+        }
+
+        .faq-answer {
+            padding: 0 1.5rem 1.5rem;
+            color: hsl(var(--muted-foreground));
+            display: none;
+        }
+
+        .faq-item.active .faq-answer {
+            display: block;
+        }
+
+        .faq-toggle {
+            width: 20px;
+            height: 20px;
+            transition: transform 0.2s ease;
+        }
+
+        .faq-item.active .faq-toggle {
+            transform: rotate(180deg);
+        }
+
+        /* CTA Section */
+        .cta-section {
+            padding: 4rem 0;
+            background: linear-gradient(135deg, hsl(var(--brand-primary) / 0.1), hsl(var(--success) / 0.1));
+        }
+
+        .cta-content {
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 0 2rem;
+            text-align: center;
+        }
+
+        .cta-title {
+            font-size: 2.25rem;
+            font-weight: 700;
+            margin: 0 0 1rem;
+        }
+
+        .cta-description {
+            font-size: 1.125rem;
+            color: hsl(var(--muted-foreground));
+            margin: 0 0 2rem;
+        }
+
+        .cta-buttons {
+            display: flex;
+            gap: 1rem;
+            justify-content: center;
+            flex-wrap: wrap;
+        }
+
+        /* Footer */
+        .footer {
+            background: hsl(var(--surface-100));
+            border-top: 1px solid hsl(var(--border));
+            padding: 2rem 0;
+            text-align: center;
+        }
+
+        .footer-content {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 2rem;
+        }
+
+        .lucide {
+            width: 20px;
+            height: 20px;
+            stroke-width: 2;
+        }
+
+        .lucide-sm {
+            width: 16px;
+            height: 16px;
+        }
+
+        /* Responsive */
+        @media (max-width: 768px) {
+            .header-content {
+                padding: 0 1rem;
+            }
+
+            .hero {
+                padding: 2rem 1rem;
+            }
+
+            .hero-cta {
+                flex-direction: column;
+            }
+
+            .features-content,
+            .benefits-content,
+            .use-cases-content,
+            .testimonials-content,
+            .faq-content,
+            .cta-content,
+            .footer-content {
+                padding: 0 1rem;
+            }
+
+            .benefits-grid,
+            .use-cases-grid,
+            .testimonials-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .cta-buttons {
+                flex-direction: column;
+                align-items: center;
+            }
+
+            .features-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <header class="header">
+        <div class="header-content">
+            <img id="header-logo" src="logo_ultrabase.png" alt="Ultrabase" class="logo">
+            <div class="header-actions">
+                <button class="theme-toggle" onclick="toggleTheme()" title="Alternar tema">
+                    <i id="theme-icon" data-lucide="sun" class="lucide"></i>
+                </button>
+                <a href="/login" class="cta-btn">
+                    <i data-lucide="log-in" class="lucide-sm"></i>
+                    Acessar Dashboard
+                </a>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main">
+        <!-- Hero Section -->
+        <section class="hero">
+            <h1 class="hero-title">Gerencie Múltiplas Instâncias Supabase</h1>
+            <p class="hero-subtitle">
+                Crie, controle e monitore suas instâncias Supabase com uma interface intuitiva e ferramentas profissionais. 
+                Simplifique seu workflow de desenvolvimento.
+            </p>
+            <div class="hero-cta">
+                <a href="/login" class="btn-primary">
+                    <i data-lucide="rocket" class="lucide-sm"></i>
+                    Começar Agora
+                </a>
+                <a href="#features" class="btn-secondary">
+                    <i data-lucide="info" class="lucide-sm"></i>
+                    Ver Recursos
+                </a>
+            </div>
+        </section>
+
+        <!-- Features Section -->
+        <section id="features" class="features">
+            <div class="features-content">
+                <h2 class="section-title">Recursos Principais</h2>
+                <div class="features-grid">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i data-lucide="server" class="lucide"></i>
+                        </div>
+                        <h3 class="feature-title">Criação Instantânea</h3>
+                        <p class="feature-description">
+                            Crie novas instâncias Supabase em minutos com configuração automática de todos os serviços essenciais.
+                        </p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i data-lucide="activity" class="lucide"></i>
+                        </div>
+                        <h3 class="feature-title">Monitoramento Avançado</h3>
+                        <p class="feature-description">
+                            Diagnósticos completos, análise de logs e relatórios de saúde para manter suas instâncias sempre funcionando.
+                        </p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i data-lucide="shield-check" class="lucide"></i>
+                        </div>
+                        <h3 class="feature-title">Controles Seguros</h3>
+                        <p class="feature-description">
+                            Pare, inicie e reinicie instâncias com segurança total. Backup automático e preservação de dados garantidos.
+                        </p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i data-lucide="code" class="lucide"></i>
+                        </div>
+                        <h3 class="feature-title">Integração com Cursor</h3>
+                        <p class="feature-description">
+                            Conecte diretamente com o Cursor IDE. Configuração automática de ambiente e templates de código.
+                        </p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i data-lucide="key" class="lucide"></i>
+                        </div>
+                        <h3 class="feature-title">Gestão de Credenciais</h3>
+                        <p class="feature-description">
+                            Gerencie chaves de API, credenciais de banco e configurações de forma centralizada e segura.
+                        </p>
+                    </div>
+
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i data-lucide="gauge" class="lucide"></i>
+                        </div>
+                        <h3 class="feature-title">Interface Intuitiva</h3>
+                        <p class="feature-description">
+                            Dashboard clean e responsivo com controles visuais claros. Experiência de usuário otimizada para produtividade.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Benefits Section -->
+        <section class="benefits">
+            <div class="benefits-content">
+                <h2 class="section-title">Por Que Escolher o Ultrabase?</h2>
+                <div class="benefits-grid">
+                    <div class="benefit-item">
+                        <i data-lucide="zap" class="benefit-icon"></i>
+                        <div class="benefit-content">
+                            <h3>Setup em Minutos, Não Horas</h3>
+                            <p>Configure uma instância completa do Supabase em menos de 5 minutos. Sem configurações complexas ou dependências externas.</p>
+                        </div>
+                    </div>
+                    <div class="benefit-item">
+                        <i data-lucide="shield" class="benefit-icon"></i>
+                        <div class="benefit-content">
+                            <h3>Isolamento e Segurança Total</h3>
+                            <p>Cada instância roda isoladamente com suas próprias credenciais, portas e configurações. Zero interferência entre projetos.</p>
+                        </div>
+                    </div>
+                    <div class="benefit-item">
+                        <i data-lucide="trending-up" class="benefit-icon"></i>
+                        <div class="benefit-content">
+                            <h3>Escalabilidade Sob Demanda</h3>
+                            <p>Crie quantas instâncias precisar. Ideal para agências, freelancers e equipes que gerenciam múltiplos projetos.</p>
+                        </div>
+                    </div>
+                    <div class="benefit-item">
+                        <i data-lucide="heart-handshake" class="benefit-icon"></i>
+                        <div class="benefit-content">
+                            <h3>Zero Vendor Lock-in</h3>
+                            <p>Suas instâncias rodam em Docker containers padrão. Migre para qualquer provider quando quiser, sem perder dados.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Use Cases Section -->
+        <section class="use-cases">
+            <div class="use-cases-content">
+                <h2 class="section-title">Casos de Uso</h2>
+                <div class="use-cases-grid">
+                    <div class="use-case-card">
+                        <h3 class="use-case-title">
+                            <i data-lucide="briefcase" class="use-case-icon"></i>
+                            Agências e Freelancers
+                        </h3>
+                        <p class="use-case-description">
+                            Gerencie projetos de múltiplos clientes com isolamento total e faturamento simplificado.
+                        </p>
+                        <ul class="use-case-features">
+                            <li>Uma instância por cliente</li>
+                            <li>Credenciais isoladas</li>
+                            <li>Backups automáticos</li>
+                            <li>Relatórios de uso</li>
+                        </ul>
+                    </div>
+                    <div class="use-case-card">
+                        <h3 class="use-case-title">
+                            <i data-lucide="code-2" class="use-case-icon"></i>
+                            Desenvolvimento de MVPs
+                        </h3>
+                        <p class="use-case-description">
+                            Prototipe rapidamente com backends completos prontos para produção.
+                        </p>
+                        <ul class="use-case-features">
+                            <li>Setup instantâneo</li>
+                            <li>Auth e database inclusos</li>
+                            <li>APIs REST e GraphQL</li>
+                            <li>Templates para frameworks</li>
+                        </ul>
+                    </div>
+                    <div class="use-case-card">
+                        <h3 class="use-case-title">
+                            <i data-lucide="users" class="use-case-icon"></i>
+                            Equipes de Desenvolvimento
+                        </h3>
+                        <p class="use-case-description">
+                            Ambientes isolados para desenvolvimento, staging e produção de cada projeto.
+                        </p>
+                        <ul class="use-case-features">
+                            <li>Ambientes por branch</li>
+                            <li>Controle de acesso</li>
+                            <li>Logs centralizados</li>
+                            <li>Monitoramento integrado</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- Testimonials Section -->
+        <section class="testimonials">
+            <div class="testimonials-content">
+                <h2 class="section-title">O Que Nossos Usuários Dizem</h2>
+                <div class="testimonials-grid">
+                    <div class="testimonial-card">
+                        <p class="testimonial-quote">
+                            "Reduziu o tempo de setup dos meus projetos de horas para minutos. Agora posso focar no que realmente importa: desenvolver features."
+                        </p>
+                        <div class="testimonial-author">
+                            <div class="testimonial-avatar">MR</div>
+                            <div class="testimonial-info">
+                                <h4>Marco Roberto</h4>
+                                <p>Desenvolvedor Full-Stack</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="testimonial-card">
+                        <p class="testimonial-quote">
+                            "Perfeito para nossa agência. Cada cliente tem sua instância isolada e conseguimos gerenciar tudo de um lugar só."
+                        </p>
+                        <div class="testimonial-author">
+                            <div class="testimonial-avatar">AS</div>
+                            <div class="testimonial-info">
+                                <h4>Ana Silva</h4>
+                                <p>Tech Lead, DevStudio</p>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="testimonial-card">
+                        <p class="testimonial-quote">
+                            "A integração com o Cursor é fantástica. Templates prontos e configuração automática salvaram semanas de trabalho."
+                        </p>
+                        <div class="testimonial-author">
+                            <div class="testimonial-avatar">CF</div>
+                            <div class="testimonial-info">
+                                <h4>Carlos Ferreira</h4>
+                                <p>CTO, StartupXYZ</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- FAQ Section -->
+        <section class="faq">
+            <div class="faq-content">
+                <h2 class="section-title">Perguntas Frequentes</h2>
+                <div class="faq-list">
+                    <div class="faq-item">
+                        <button class="faq-question" onclick="toggleFAQ(this)">
+                            O que é o Ultrabase?
+                            <i data-lucide="chevron-down" class="faq-toggle"></i>
+                        </button>
+                        <div class="faq-answer">
+                            <p>O Ultrabase é um gerenciador que permite criar e controlar múltiplas instâncias do Supabase em seus próprios servidores. É ideal para desenvolvedores, agências e equipes que precisam de backends isolados para diferentes projetos.</p>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <button class="faq-question" onclick="toggleFAQ(this)">
+                            Como funciona o isolamento entre instâncias?
+                            <i data-lucide="chevron-down" class="faq-toggle"></i>
+                        </button>
+                        <div class="faq-answer">
+                            <p>Cada instância roda em containers Docker separados com suas próprias portas, credenciais de banco de dados, chaves de API e configurações. Não há comunicação ou interferência entre diferentes instâncias.</p>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <button class="faq-question" onclick="toggleFAQ(this)">
+                            Preciso de conhecimento técnico avançado?
+                            <i data-lucide="chevron-down" class="faq-toggle"></i>
+                        </button>
+                        <div class="faq-answer">
+                            <p>Não! O Ultrabase foi projetado para ser simples. Você só precisa ter Docker instalado e seguir nosso processo de setup de 3 cliques. A interface é intuitiva e não requer conhecimento de DevOps.</p>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <button class="faq-question" onclick="toggleFAQ(this)">
+                            Quantas instâncias posso criar?
+                            <i data-lucide="chevron-down" class="faq-toggle"></i>
+                        </button>
+                        <div class="faq-answer">
+                            <p>O limite depende apenas dos recursos do seu servidor (CPU, RAM, armazenamento). Cada instância usa aproximadamente 1GB de RAM. Você pode criar centenas de instâncias em um servidor adequado.</p>
+                        </div>
+                    </div>
+                    <div class="faq-item">
+                        <button class="faq-question" onclick="toggleFAQ(this)">
+                            Os dados ficam seguros?
+                            <i data-lucide="chevron-down" class="faq-toggle"></i>
+                        </button>
+                        <div class="faq-answer">
+                            <p>Sim! Seus dados ficam no seu próprio servidor, não em serviços terceiros. Implementamos backups automáticos, criptografia e todas as práticas de segurança do Supabase oficial.</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- CTA Section -->
+        <section class="cta-section">
+            <div class="cta-content">
+                <h2 class="cta-title">Pronto para Acelerar seu Desenvolvimento?</h2>
+                <p class="cta-description">
+                    Junte-se a centenas de desenvolvedores que já estão usando o Ultrabase para criar projetos mais rápido e com menos complexidade.
+                </p>
+                <div class="cta-buttons">
+                    <a href="/login" class="btn-primary">
+                        <i data-lucide="rocket" class="lucide-sm"></i>
+                        Começar Gratuitamente
+                    </a>
+                    <a href="#features" class="btn-secondary">
+                        <i data-lucide="book-open" class="lucide-sm"></i>
+                        Ver Documentação
+                    </a>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-content">
+            <p>&copy; 2024 Ultrabase. Gerenciador profissional de instâncias Supabase.</p>
+        </div>
+    </footer>
+
+    <script>
+        // Theme Management
+        let currentTheme = localStorage.getItem('theme') || 'dark';
+
+        function initializeTheme() {
+            document.documentElement.classList.toggle('dark', currentTheme === 'dark');
+            updateThemeIcon();
+            updateLogo();
+        }
+
+        function toggleTheme() {
+            currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+            localStorage.setItem('theme', currentTheme);
+            document.documentElement.classList.toggle('dark', currentTheme === 'dark');
+            updateThemeIcon();
+            updateLogo();
+        }
+
+        function updateThemeIcon() {
+            const themeIcon = document.getElementById('theme-icon');
+            themeIcon.setAttribute('data-lucide', currentTheme === 'dark' ? 'sun' : 'moon');
+            lucide.createIcons();
+        }
+
+        function updateLogo() {
+            const headerLogo = document.getElementById('header-logo');
+            const logoSrc = currentTheme === 'dark' ? 'logo_ultrabase.png' : 'logo_ultrabase_black.png';
+            
+            if (headerLogo) {
+                headerLogo.src = logoSrc;
+            }
+        }
+
+        // Initialize
+        document.addEventListener('DOMContentLoaded', function() {
+            initializeTheme();
+            lucide.createIcons();
+            
+            // Check if user is already logged in and redirect to dashboard
+            checkAuthAndRedirect();
+            
+            // Update URLs based on current domain
+            updateDomainUrls();
+        });
+        
+        // Check authentication and redirect if logged in
+        async function checkAuthAndRedirect() {
+            const token = localStorage.getItem('ultrabase_token');
+            
+            if (token) {
+                try {
+                    // Verify token with server
+                    const response = await fetch('/api/auth/verify', {
+                        headers: {
+                            'Authorization': `Bearer ${token}`
+                        }
+                    });
+                    
+                    if (response.ok) {
+                        // User is authenticated, redirect to dashboard
+                        console.log('✅ Usuário já logado, redirecionando para dashboard...');
+                        window.location.href = '/dashboard';
+                        return;
+                    } else {
+                        // Token is invalid, remove it
+                        localStorage.removeItem('ultrabase_token');
+                    }
+                } catch (error) {
+                    // Network error or token invalid, remove token
+                    console.warn('⚠️ Erro ao verificar autenticação:', error);
+                    localStorage.removeItem('ultrabase_token');
+                }
+            }
+            
+            // User is not authenticated, show landing page normally
+            console.log('🏠 Usuário não autenticado, exibindo landing page');
+        }
+        
+        function updateDomainUrls() {
+            const currentHost = window.location.host;
+            const isProduction = currentHost.includes('ultrabase.com');
+            
+            if (isProduction) {
+                // Update all login links to use current domain
+                document.querySelectorAll('a[href="/login"]').forEach(link => {
+                    link.href = '/login';
+                });
+            }
+        }
+
+        // FAQ Toggle Function
+        function toggleFAQ(button) {
+            const faqItem = button.parentElement;
+            const isActive = faqItem.classList.contains('active');
+            
+            // Close all other FAQ items
+            document.querySelectorAll('.faq-item').forEach(item => {
+                item.classList.remove('active');
+            });
+            
+            // Toggle current item
+            if (!isActive) {
+                faqItem.classList.add('active');
+            }
+            
+            // Update icon
+            lucide.createIcons();
+        }
+
+        // Smooth scrolling for anchor links
+        document.querySelectorAll('a[href^="#"]').forEach(anchor => {
+            anchor.addEventListener('click', function (e) {
+                e.preventDefault();
+                const target = document.querySelector(this.getAttribute('href'));
+                if (target) {
+                    target.scrollIntoView({
+                        behavior: 'smooth',
+                        block: 'start'
+                    });
+                }
+            });
+        });
+    </script>
+</body>
+</html>

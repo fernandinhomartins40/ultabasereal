@@ -1,0 +1,3 @@
+
+# Ignorar dependências do Node.js
+src/node_modules
