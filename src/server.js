@@ -1662,7 +1662,7 @@ class SupabaseInstanceManager {
    */
   clearStaleLocks() {
     const now = Date.now();
-    const maxLockAge = 5 * 60 * 1000; // 5 minutos (reduzido de 15)
+    const maxLockAge = 2 * 60 * 1000; // 2 minutos (reduzido para resolver locks presos)
     
     for (const [lockKey, lockTime] of this.creationLock.entries()) {
       if ((now - lockTime) > maxLockAge) {
@@ -1670,6 +1670,16 @@ class SupabaseInstanceManager {
         this.creationLock.delete(lockKey);
       }
     }
+  }
+
+  /**
+   * Força a limpeza de todos os locks (para emergências)
+   */
+  clearAllLocks() {
+    const lockCount = this.creationLock.size;
+    this.creationLock.clear();
+    console.log(`🧹 Forçado: ${lockCount} locks removidos`);
+    return lockCount;
   }
 
   /**
@@ -2833,6 +2843,34 @@ app.post('/api/system/clear-locks', authenticateToken, async (req, res) => {
     
   } catch (error) {
     console.error('Erro ao limpar locks:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * Força limpeza de locks antigos (não requer admin)
+ */
+app.post('/api/system/clear-stale-locks', authenticateToken, async (req, res) => {
+  try {
+    const before = manager.creationLock.size;
+    console.log(`🧹 Usuário ${req.user.id} forçando limpeza de locks antigos`);
+    
+    // Forçar limpeza de locks antigos
+    manager.clearStaleLocks();
+    
+    const after = manager.creationLock.size;
+    const cleared = before - after;
+    
+    res.json({ 
+      success: true,
+      message: cleared > 0 ? `${cleared} locks antigos removidos` : 'Nenhum lock antigo encontrado',
+      locks_before: before,
+      locks_after: after,
+      cleared_count: cleared
+    });
+    
+  } catch (error) {
+    console.error('Erro ao limpar locks antigos:', error);
     res.status(500).json({ error: error.message });
   }
 });
