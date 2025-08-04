@@ -1454,6 +1454,29 @@ class SupabaseInstanceManager {
   }
 
   /**
+   * Broadcast de progresso de criação via WebSocket
+   */
+  broadcastProgress(message, percentage) {
+    const progress = {
+      type: 'creation_progress',
+      message,
+      percentage,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Broadcast para todos os clientes WebSocket conectados
+    if (global.wsClients) {
+      global.wsClients.forEach(client => {
+        if (client.readyState === 1) { // WebSocket.OPEN
+          client.send(JSON.stringify(progress));
+        }
+      });
+    }
+    
+    console.log(`📡 [Progresso WebSocket] ${percentage}% - ${message}`);
+  }
+
+  /**
    * Cria nova instância Supabase usando generate.bash (método original)
    */
   async createInstance(projectName, customConfig = {}) {
@@ -1479,11 +1502,17 @@ class SupabaseInstanceManager {
       this.creationLock.set(lockKey, Date.now());
       logger.debug(`✅ Lock adquirido: ${lockKey}`);
       
+      // PROGRESSO 1: Configurando instância
+      this.broadcastProgress('🔧 Configurando nova instância...', 10);
+      
       // Gerar configuração da instância primeiro para obter instanceId
       instance = await this.generateInstanceConfig(projectName, customConfig);
       const instanceId = instance.id;
       
       logger.instance(instanceId, `🚀 Iniciando criação do projeto: ${projectName}`, { projectName, customConfig });
+      
+      // PROGRESSO 2: Validações
+      this.broadcastProgress('✅ Validando requisitos...', 20);
       
       // Validações
       if (!projectName || projectName.trim().length === 0) {
@@ -1505,6 +1534,9 @@ class SupabaseInstanceManager {
       
       console.log('✅ Recursos suficientes disponíveis para nova instância');
 
+      // PROGRESSO 3: Verificando duplicatas
+      this.broadcastProgress('🔍 Verificando nomes duplicados...', 30);
+      
       // Verificar se já existe projeto com esse nome
       const existingProject = Object.values(this.instances).find(
         i => i.name.toLowerCase() === projectName.toLowerCase()
@@ -1512,6 +1544,9 @@ class SupabaseInstanceManager {
       if (existingProject) {
         throw new Error('Já existe um projeto com este nome');
       }
+      
+      // PROGRESSO 4: Verificando Docker
+      this.broadcastProgress('🐳 Verificando Docker...', 40);
       
       // Verificar se Docker está disponível
       try {
@@ -1535,6 +1570,9 @@ class SupabaseInstanceManager {
         throw new Error(`Diretório Docker não encontrado: ${CONFIG.DOCKER_DIR}`);
       }
 
+      // PROGRESSO 5: Salvando configuração
+      this.broadcastProgress('💾 Salvando configuração...', 50);
+      
       // CORREÇÃO FASE 2: Configuração já gerada acima
       console.log('⚙️ Configuração da instância preparada...');
       
@@ -1547,12 +1585,18 @@ class SupabaseInstanceManager {
       
       console.log(`💾 Instância ${instance.id} salva com status 'creating'`);
 
+      // PROGRESSO 6: Executando script de criação
+      this.broadcastProgress('⚙️ Criando containers Docker... (pode demorar alguns minutos)', 60);
+      
       // Executar generate.bash para criar e iniciar a instância
       console.log('🔧 Executando generate.bash para criar instância...');
       console.log('⏳ ATENÇÃO: Primeira criação pode demorar 5-10 minutos (download de imagens Docker)');
       
       try {
         await this.executeGenerateScript(instance);
+        
+        // PROGRESSO 7: Finalizando
+        this.broadcastProgress('🚀 Iniciando serviços...', 90);
         
         // Atualizar status para running após sucesso
         instance.status = 'running';
@@ -1561,12 +1605,16 @@ class SupabaseInstanceManager {
         
         console.log(`✅ Instância ${instance.id} criada e iniciada com sucesso via generate.bash`);
         
+        // PROGRESSO 8: Concluído
+        this.broadcastProgress('✅ Instância criada com sucesso!', 100);
+        
       } catch (scriptError) {
         console.error(`❌ Erro ao executar generate.bash para ${instance.id}:`, scriptError);
         instance.status = 'error';
         instance.error_message = scriptError.message;
         instance.updated_at = new Date().toISOString();
         this.saveInstances();
+        this.broadcastProgress(`❌ Erro: ${scriptError.message}`, 0);
         throw scriptError;
       }
 
