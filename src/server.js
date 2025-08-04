@@ -1108,15 +1108,15 @@ class SupabaseInstanceManager {
   }
 
   /**
-   * Verifica status de uma instância específica
+   * Verifica status REAL de uma instância específica (com conectividade)
    */
   async getInstanceStatus(instance) {
     try {
-      // Verificar containers com timeout
+      // Verificar containers Kong (mais confiável)
       const containers = await Promise.race([
         docker.listContainers({ 
           all: true, 
-          filters: { name: [`supabase-studio-${instance.id}`] } 
+          filters: { name: [`supabase-kong-${instance.id}`] } 
         }),
         new Promise((_, reject) => 
           setTimeout(() => reject(new Error('Container list timeout')), 10000)
@@ -1125,21 +1125,291 @@ class SupabaseInstanceManager {
       
       if (containers.length === 0) {
         console.log(`📦 Nenhum container encontrado para instância ${instance.id}`);
+        instance.status = 'stopped';
+        this.saveInstances();
         return 'stopped';
       }
       
-      const status = containers[0].State === 'running' ? 'running' : 'stopped';
-      console.log(`📦 Status da instância ${instance.id}: ${status}`);
-      return status;
+      const container = containers[0];
+      if (container.State === 'running') {
+        // Testar conectividade real com timeout
+        try {
+          const testUrl = `http://localhost:${instance.ports.kong}/health`;
+          const response = await Promise.race([
+            fetch(testUrl),
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Fetch timeout')), 3000)
+            )
+          ]);
+          
+          if (response.ok) {
+            console.log(`✅ Instância ${instance.id} rodando e respondendo`);
+            instance.status = 'running';
+            instance.ready = true;
+            this.saveInstances();
+            return 'running';
+          } else {
+            console.log(`⏳ Instância ${instance.id} iniciando...`);
+            instance.status = 'starting';
+            this.saveInstances();
+            return 'starting';
+          }
+        } catch (fetchError) {
+          console.log(`⏳ Instância ${instance.id} ainda não responde`);
+          instance.status = 'starting';
+          this.saveInstances();
+          return 'starting';
+        }
+      } else if (container.State === 'restarting') {
+        instance.status = 'starting';
+        this.saveInstances();
+        return 'starting';
+      } else {
+        console.log(`📦 Container ${instance.id} parado: ${container.State}`);
+        instance.status = 'stopped';
+        this.saveInstances();
+        return 'stopped';
+      }
       
     } catch (error) {
       console.warn(`⚠️ Erro ao verificar status da instância ${instance.id}:`, error.message);
+      instance.status = 'error';
+      instance.error_message = error.message;
+      this.saveInstances();
       return 'error';
     }
   }
 
   /**
-   * Cria nova instância Supabase usando generate.bash
+   * Atualiza status de todas as instâncias (polling)
+   */
+  async updateAllInstancesStatus() {
+    const instances = Object.values(this.instances);
+    
+    for (const instance of instances) {
+      try {
+        const oldStatus = instance.status;
+        const newStatus = await this.getInstanceStatus(instance);
+        
+        // Broadcast apenas se status mudou
+        if (oldStatus !== newStatus) {
+          console.log(`📊 Status de ${instance.name} (${instance.id}) mudou: ${oldStatus} → ${newStatus}`);
+          this.broadcastInstanceUpdate(instance.id, newStatus, `Status: ${newStatus}`);
+        }
+      } catch (error) {
+        console.warn(`⚠️ Erro ao atualizar status de ${instance.id}:`, error.message);
+      }
+    }
+  }
+
+  /**
+   * Cria nova instância Supabase de forma assíncrona (resposta imediata)
+   */
+  async createInstanceAsync(projectName, customConfig = {}) {
+    const lockKey = `creation_${Date.now()}_${Math.random()}`;
+    
+    try {
+      console.log(`🔒 Verificando lock de criação...`);
+      this.clearStaleLocks();
+      
+      if (this.creationLock.size > 0) {
+        throw new Error('Já existe uma instância sendo criada. Aguarde alguns minutos.');
+      }
+      
+      // Adquirir lock
+      this.creationLock.set(lockKey, Date.now());
+      logger.debug(`✅ Lock adquirido: ${lockKey}`);
+      
+      // Criar instância básica imediatamente
+      const instance = await this.prepareInstanceForCreation(projectName, customConfig);
+      
+      // Salvar com status 'creating'
+      instance.status = 'creating';
+      this.instances[instance.id] = instance;
+      this.saveInstances();
+      
+      console.log(`💾 Instância ${instance.id} criada com status 'creating'`);
+      
+      // EXECUTAR PROCESSO COMPLETO EM BACKGROUND
+      this.executeCreationInBackground(instance, lockKey);
+      
+      return {
+        success: true,
+        instance: instance,
+        message: 'Instância em criação...'
+      };
+      
+    } catch (error) {
+      this.creationLock.delete(lockKey);
+      throw error;
+    }
+  }
+
+  /**
+   * Prepara instância para criação (parte síncrona)
+   */
+  async prepareInstanceForCreation(projectName, customConfig = {}) {
+    // Gerar ID da instância
+    const instanceId = Math.random().toString(36).substring(2, 10);
+    
+    // Verificar recursos
+    await this.validateSystemResources();
+    
+    // Alocar portas
+    const ports = this.allocateInstancePorts(instanceId);
+    console.log(`✅ Portas alocadas: Kong HTTP=${ports.kong}, HTTPS=${ports.kong_https}, PostgreSQL=${ports.postgres_ext}, Analytics=${ports.analytics}`);
+    
+    // Gerar credenciais
+    const credentials = this.generateInstanceCredentials(instanceId, customConfig);
+    
+    // Criar objeto da instância
+    const instance = {
+      id: instanceId,
+      name: projectName,
+      status: 'creating', // Status inicial
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString(),
+      ports: ports,
+      credentials: credentials,
+      config: {
+        organization: customConfig.organization || 'DefaultOrg',
+        dashboard_username: customConfig.dashboard_username || 'admin',
+        dashboard_password: customConfig.dashboard_password || 'admin',
+        owner: customConfig.owner || 'admin'
+      },
+      urls: {
+        studio: `http://${EXTERNAL_IP}:${ports.kong}`,
+        database: `postgres://postgres:${credentials.postgres_password}@${EXTERNAL_IP}:${ports.postgres_ext}/postgres`,
+        api: `http://${EXTERNAL_IP}:${ports.kong}/rest/v1/`
+      },
+      docker: {
+        compose_file: `docker-compose-${instanceId}.yml`,
+        env_file: `.env-${instanceId}`,
+        volumes_dir: `volumes-${instanceId}`
+      }
+    };
+    
+    return instance;
+  }
+
+  /**
+   * Executa criação completa em background
+   */
+  async executeCreationInBackground(instance, lockKey) {
+    try {
+      console.log(`🔧 Executando criação em background para ${instance.id}...`);
+      
+      // Atualizar status para 'downloading'
+      instance.status = 'downloading';
+      this.instances[instance.id] = instance;
+      this.saveInstances();
+      this.broadcastInstanceUpdate(instance.id, 'downloading', 'Baixando imagens Docker...');
+      
+      // Executar generate.bash
+      await this.executeGenerateScript(instance);
+      
+      // Atualizar status para 'starting'
+      instance.status = 'starting';
+      this.instances[instance.id] = instance;
+      this.saveInstances();
+      this.broadcastInstanceUpdate(instance.id, 'starting', 'Iniciando containers...');
+      
+      // Aguardar containers ficarem prontos
+      await this.waitForContainersReady(instance);
+      
+      // Atualizar status para 'running'
+      instance.status = 'running';
+      instance.ready = true;
+      instance.updated_at = new Date().toISOString();
+      this.instances[instance.id] = instance;
+      this.saveInstances();
+      
+      console.log(`✅ Instância ${instance.id} criada e iniciada com sucesso`);
+      this.broadcastInstanceUpdate(instance.id, 'running', 'Instância criada com sucesso!');
+      
+    } catch (error) {
+      console.error(`❌ Erro na criação em background de ${instance.id}:`, error);
+      
+      // Atualizar status para 'error'
+      instance.status = 'error';
+      instance.error_message = error.message;
+      instance.updated_at = new Date().toISOString();
+      this.instances[instance.id] = instance;
+      this.saveInstances();
+      
+      this.broadcastInstanceUpdate(instance.id, 'error', `Erro: ${error.message}`);
+      
+    } finally {
+      // Liberar lock
+      this.creationLock.delete(lockKey);
+      console.log(`🔓 Lock liberado: ${lockKey}`);
+    }
+  }
+
+  /**
+   * Aguarda containers ficarem prontos
+   */
+  async waitForContainersReady(instance, maxWaitTime = 300000) { // 5 minutos
+    const startTime = Date.now();
+    
+    while (Date.now() - startTime < maxWaitTime) {
+      try {
+        // Verificar se containers estão rodando
+        const containers = await docker.listContainers({
+          filters: { name: [`supabase-kong-${instance.id}`] }
+        });
+        
+        if (containers.length > 0 && containers[0].State === 'running') {
+          // Testar conectividade Kong
+          const testUrl = `http://localhost:${instance.ports.kong}/health`;
+          try {
+            const response = await fetch(testUrl);
+            if (response.ok) {
+              console.log(`✅ Instância ${instance.id} respondendo corretamente`);
+              return true;
+            }
+          } catch (fetchError) {
+            // Kong ainda não está pronto
+          }
+        }
+        
+        await new Promise(resolve => setTimeout(resolve, 5000)); // Aguardar 5 segundos
+        
+      } catch (error) {
+        console.warn(`⚠️ Erro ao verificar containers: ${error.message}`);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+    }
+    
+    throw new Error('Timeout: Containers não ficaram prontos em 5 minutos');
+  }
+
+  /**
+   * Broadcast de atualização de instância via WebSocket
+   */
+  broadcastInstanceUpdate(instanceId, status, message) {
+    const update = {
+      type: 'instance_update',
+      instanceId,
+      status,
+      message,
+      timestamp: new Date().toISOString()
+    };
+    
+    // Broadcast para todos os clientes WebSocket conectados
+    if (global.wsClients) {
+      global.wsClients.forEach(client => {
+        if (client.readyState === 1) { // WebSocket.OPEN
+          client.send(JSON.stringify(update));
+        }
+      });
+    }
+    
+    console.log(`📡 [WebSocket] ${instanceId}: ${status} - ${message}`);
+  }
+
+  /**
+   * Cria nova instância Supabase usando generate.bash (método original)
    */
   async createInstance(projectName, customConfig = {}) {
     let instance = null;
@@ -2397,16 +2667,9 @@ app.post('/api/instances', authenticateToken, async (req, res) => {
       owner: req.user.id
     };
     
-    // Timeout mais longo para criação de instâncias (10 minutos)
-    const timeoutPromise = new Promise((_, reject) => 
-      setTimeout(() => reject(new Error('Timeout na criação do projeto (10 minutos). Tente novamente.')), 600000)
-    );
-    
+    // RESPOSTA IMEDIATA - Criar instância em background
     try {
-      const result = await Promise.race([
-        manager.createInstance(projectName, configWithOwner),
-        timeoutPromise
-      ]);
+      const result = await manager.createInstanceAsync(projectName, configWithOwner);
       
       // Adicionar projeto ao usuário
       if (req.user.role !== 'admin') {
@@ -2414,21 +2677,19 @@ app.post('/api/instances', authenticateToken, async (req, res) => {
         console.log(`👤 Projeto ${result.instance.id} adicionado ao usuário ${req.user.id}`);
       }
       
-      console.log('✅ Projeto criado com sucesso:', result.instance.id);
-      console.log(`🔗 Studio URL: ${result.instance.urls.studio}`);
-      console.log(`🔗 API URL: ${result.instance.urls.api}`);
-      res.json(result);
+      console.log('✅ Instância iniciada com sucesso:', result.instance.id);
+      console.log('⏳ Criação continuará em background...');
       
-    } catch (timeoutError) {
-      if (timeoutError.message.includes('Timeout')) {
-        console.error('⏰ Timeout na criação do projeto');
-        res.status(408).json({ 
-          error: 'Timeout na criação do projeto. Isso pode acontecer na primeira vez devido ao download das imagens Docker. Tente novamente em alguns minutos.',
-          code: 'CREATION_TIMEOUT'
-        });
-      } else {
-        throw timeoutError;
-      }
+      // RESPOSTA IMEDIATA - instância com status 'creating'
+      res.json({
+        success: true,
+        message: 'Instância em criação. Acompanhe o progresso em tempo real.',
+        instance: result.instance,
+        status: 'creating'
+      });
+      
+    } catch (error) {
+      throw error;
     }
     
   } catch (error) {
@@ -3824,10 +4085,23 @@ async function startServer() {
    📊 Dashboard: http://localhost:${PORT}/dashboard
    🔑 Login: http://localhost:${PORT}/login
    🔗 API: https://${DOMAIN_CONFIG.primary}/api
+   🔌 WebSocket: ws://${DOMAIN_CONFIG.primary}/ws
    
    Status: ✅ ONLINE
    Instâncias salvas: ${Object.keys(manager.instances).length}
       `);
+      
+      // Inicializar WebSocket Server
+      initializeWebSocket(server);
+      
+      // Iniciar polling de status das instâncias (a cada 30 segundos)
+      setInterval(() => {
+        if (dockerAvailable) {
+          manager.updateAllInstancesStatus().catch(error => {
+            console.warn('⚠️ Erro no polling de status:', error.message);
+          });
+        }
+      }, 30000); // 30 segundos
       
       // Verificar Docker em background (não bloqueia startup)
       checkDockerInBackground();
@@ -3908,6 +4182,74 @@ process.on('unhandledRejection', (reason, promise) => {
   console.error('❌ Promise rejeitada não tratada:', reason);
   process.exit(1);
 });
+
+// ====================================================================
+// WEBSOCKET SERVER PARA UPDATES EM TEMPO REAL
+// ====================================================================
+
+// WebSocket já importado no topo
+let wss;
+global.wsClients = new Set();
+
+function initializeWebSocket(server) {
+  wss = new WebSocket.Server({ 
+    server,
+    path: '/ws'
+  });
+
+  wss.on('connection', (ws, req) => {
+    console.log('🔌 Nova conexão WebSocket estabelecida');
+    global.wsClients.add(ws);
+
+    // Ping/pong para manter conexão viva
+    const pingInterval = setInterval(() => {
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.ping();
+      }
+    }, 30000);
+
+    ws.on('message', (message) => {
+      try {
+        const data = JSON.parse(message);
+        console.log('📨 WebSocket message received:', data);
+        
+        // Responder com status atual das instâncias se solicitado
+        if (data.type === 'get_instances_status') {
+          const instancesStatus = Object.keys(manager.instances).map(id => ({
+            id,
+            status: manager.instances[id].status,
+            name: manager.instances[id].name
+          }));
+          
+          ws.send(JSON.stringify({
+            type: 'instances_status',
+            instances: instancesStatus
+          }));
+        }
+      } catch (error) {
+        console.warn('⚠️ Erro ao processar mensagem WebSocket:', error.message);
+      }
+    });
+
+    ws.on('close', () => {
+      console.log('🔌 Conexão WebSocket fechada');
+      global.wsClients.delete(ws);
+      clearInterval(pingInterval);
+    });
+
+    ws.on('error', (error) => {
+      console.error('❌ Erro WebSocket:', error.message);
+      global.wsClients.delete(ws);
+      clearInterval(pingInterval);
+    });
+  });
+
+  console.log('✅ WebSocket Server inicializado em /ws');
+}
+
+// ====================================================================
+// INICIALIZAÇÃO DO SERVIDOR
+// ====================================================================
 
 // Iniciar servidor
 startServer();
