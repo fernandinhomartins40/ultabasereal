@@ -1273,7 +1273,11 @@ class SupabaseInstanceManager {
     const instanceId = Math.random().toString(36).substring(2, 10);
     
     // Verificar recursos
-    await this.validateSystemResources();
+    const resourceValidation = await this.validateResourcesForNewInstance();
+    if (!resourceValidation.canCreate) {
+      const issuesText = resourceValidation.issues.join('; ');
+      throw new Error(`⚠️ Recursos insuficientes: ${issuesText}`);
+    }
     
     // Alocar portas
     const ports = this.allocateInstancePorts(instanceId);
