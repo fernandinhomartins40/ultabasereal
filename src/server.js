@@ -1223,6 +1223,27 @@ class SupabaseInstanceManager {
   }
 
   /**
+   * Aloca portas para uma instância
+   */
+  async allocateInstancePorts(instanceId) {
+    console.log(`🔌 Verificando portas disponíveis no sistema para instância ${instanceId}...`);
+    const ports = {
+      kong_http: await this.generateAvailablePortReal('kong_http'),
+      kong_https: await this.generateAvailablePortReal('kong_https'),
+      postgres_ext: await this.generateAvailablePortReal('postgres_ext'),
+      supavisor: await this.generateAvailablePortReal('supavisor'),
+      analytics: await this.generateAvailablePortReal('analytics')
+    };
+    
+    // Manter compatibilidade com propriedades esperadas
+    ports.kong = ports.kong_http;
+    ports.kong_https = ports.kong_https;
+    
+    console.log(`✅ Portas alocadas: Kong HTTP=${ports.kong_http}, HTTPS=${ports.kong_https}, PostgreSQL=${ports.postgres_ext}, Analytics=${ports.analytics}`);
+    return ports;
+  }
+
+  /**
    * Cria nova instância Supabase de forma assíncrona (resposta imediata)
    */
   async createInstanceAsync(projectName, customConfig = {}) {
