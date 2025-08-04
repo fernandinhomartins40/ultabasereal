@@ -979,6 +979,26 @@ class SupabaseInstanceManager {
   }
 
   /**
+   * Gera credenciais completas para uma instância
+   */
+  generateInstanceCredentials(instanceId, customConfig = {}) {
+    const jwtSecret = this.generateJWTSecret();
+    const anonKey = this.generateSupabaseKey('anon', jwtSecret);
+    const serviceRoleKey = this.generateSupabaseKey('service_role', jwtSecret);
+    
+    return {
+      postgres_password: this.generateSecurePassword(),
+      jwt_secret: jwtSecret,
+      anon_key: anonKey,
+      service_role_key: serviceRoleKey,
+      dashboard_username: customConfig.dashboard_username || 'admin',
+      dashboard_password: customConfig.dashboard_password || 'admin',
+      vault_enc_key: this.generateSecurePassword(32),
+      logflare_api_key: this.generateSecurePassword(24)
+    };
+  }
+
+  /**
    * Gera chaves Supabase (ANON_KEY e SERVICE_ROLE_KEY)
    * Implementação completa com JWT válido
    */
