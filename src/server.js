@@ -2712,9 +2712,9 @@ app.post('/api/instances', authenticateToken, async (req, res) => {
       owner: req.user.id
     };
     
-    // RESPOSTA IMEDIATA - Criar instância em background
+    // CRIAÇÃO SÍNCRONA - Aguardar conclusão completa
     try {
-      const result = await manager.createInstanceAsync(projectName, configWithOwner);
+      const result = await manager.createInstance(projectName, configWithOwner);
       
       // Adicionar projeto ao usuário
       if (req.user.role !== 'admin') {
