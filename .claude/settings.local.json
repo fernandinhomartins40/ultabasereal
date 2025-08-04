@@ -41,7 +41,8 @@
       "Bash(nslookup:*)",
       "Bash(ping:*)",
       "Bash(telnet:*)",
-      "Bash(powershell:*)"
+      "Bash(powershell:*)",
+      "Bash(git tag:*)"
     ],
     "deny": []
   }
