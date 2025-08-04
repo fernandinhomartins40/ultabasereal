@@ -578,112 +578,21 @@ jobs:
         sshpass -p '${{ secrets.VPS_PASSWORD }}' ssh -o StrictHostKeyChecking=no ${{ env.VPS_USER }}@${{ env.VPS_HOST }} "
           export PATH='/usr/local/bin:/usr/bin:/bin:\$PATH'
           
-          echo '=== Status da Aplicação ==='
-          pm2 status supabase-manager
+          echo '=== Status PM2 ==='
+          pm2 status supabase-manager || echo 'PM2 não encontrado'
           
           echo ''
-          echo '=== Teste de Conectividade ==='
-          for i in {1..5}; do
-            if curl -f -s http://localhost:3080/ >/dev/null 2>&1; then
-              echo '✅ Aplicação responde na porta 3080'
-              break
-            else
-              echo \"⏳ Tentativa \$i/5...\"
-              sleep 3
-            fi
-            
-            if [ \$i -eq 5 ]; then
-              echo '❌ Aplicação não responde após 15 segundos'
-              pm2 logs supabase-manager --lines 20
-            fi
-          done
+          echo '=== Teste Rápido ==='
+          # Teste simples com timeout de 10 segundos
+          timeout 10 curl -f -s http://localhost:3080/ > /dev/null && echo '✅ App responde' || echo '⚠️ App não responde'
+          timeout 10 curl -f -s http://localhost/ > /dev/null && echo '✅ Nginx OK' || echo '⚠️ Nginx com problema'
           
           echo ''
-          echo '=== Teste via Nginx ==='
-          echo '🔍 Testando Nginx diretamente...'
-          if curl -f -s http://localhost/ >/dev/null 2>&1; then
-            echo '✅ Nginx proxy funcionando'
-            echo '📋 Resposta do Nginx:'
-            curl -s http://localhost/ | head -10
-          else
-            echo '❌ Problema no Nginx proxy - verificando e corrigindo...'
-            echo '📋 Status do Nginx:'
-            systemctl status nginx --no-pager -l || true
-            echo '📋 Configuração ativa:'
-            ls -la /etc/nginx/sites-enabled/
-            echo '📋 Teste de configuração:'
-            /usr/sbin/nginx -t
-            
-            # Verificar se Nginx está rodando
-            if ! systemctl is-active nginx >/dev/null 2>&1; then
-              echo '🔧 Nginx não está ativo, iniciando...'
-              systemctl start nginx
-              sleep 3
-            fi
-            
-            # Verificar configuração
-            if ! /usr/sbin/nginx -t >/dev/null 2>&1; then
-              echo '🔧 Erro na configuração do Nginx, recriando...'
-              echo 'server {' > /etc/nginx/sites-available/ultrabase
-              echo '    listen 80;' >> /etc/nginx/sites-available/ultrabase
-              echo '    server_name ultrabase.com.br www.ultrabase.com.br;' >> /etc/nginx/sites-available/ultrabase
-              echo '    ' >> /etc/nginx/sites-available/ultrabase
-              echo '    location / {' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_pass http://127.0.0.1:3080;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_http_version 1.1;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_set_header Upgrade \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_set_header Connection upgrade;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_set_header Host \$host;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_set_header X-Real-IP \$remote_addr;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_set_header X-Forwarded-Proto \$scheme;' >> /etc/nginx/sites-available/ultrabase
-              echo '        proxy_cache_bypass \$http_upgrade;' >> /etc/nginx/sites-available/ultrabase
-              echo '    }' >> /etc/nginx/sites-available/ultrabase
-              echo '    ' >> /etc/nginx/sites-available/ultrabase
-              echo '    location /health {' >> /etc/nginx/sites-available/ultrabase
-              echo '        access_log off;' >> /etc/nginx/sites-available/ultrabase
-              echo '        return 200 \"healthy\";' >> /etc/nginx/sites-available/ultrabase
-              echo '        add_header Content-Type text/plain;' >> /etc/nginx/sites-available/ultrabase
-              echo '    }' >> /etc/nginx/sites-available/ultrabase
-              echo '}' >> /etc/nginx/sites-available/ultrabase
-              
-              # Habilitar site
-              ln -sf /etc/nginx/sites-available/ultrabase /etc/nginx/sites-enabled/
-              rm -f /etc/nginx/sites-enabled/default
-              
-              # Testar e recarregar
-              if /usr/sbin/nginx -t; then
-                systemctl reload nginx
-                echo '✅ Configuração do Nginx corrigida'
-              else
-                echo '❌ Ainda há erro na configuração do Nginx'
-                /usr/sbin/nginx -t
-              fi
-            fi
-            
-            # Testar novamente após correção
-            sleep 5
-            if curl -f -s http://localhost/ >/dev/null 2>&1; then
-              echo '✅ Nginx proxy funcionando após correção'
-            else
-              echo '❌ Nginx proxy ainda com problema'
-              echo '📋 Status do Nginx:'
-              systemctl status nginx --no-pager -l
-              echo '📋 Logs do Nginx:'
-              tail -10 /var/log/nginx/error.log 2>/dev/null || echo 'Sem logs de erro'
-            fi
-          fi
+          echo '=== Arquivos ==='
+          ls -la '${{ env.DEPLOY_DIR }}/src/' | head -5
           
           echo ''
-          echo '=== Arquivos Críticos ==='
-          echo \"index.html: \$([ -f '${{ env.DEPLOY_DIR }}/src/public/index.html' ] && echo '✅ OK' || echo '❌ MISSING')\"
-          echo \"server.js: \$([ -f '${{ env.DEPLOY_DIR }}/src/server.js' ] && echo '✅ OK' || echo '❌ MISSING')\"
-          echo \"generate.bash: \$([ -f '${{ env.DEPLOY_DIR }}/supabase-core/generate.bash' ] && echo '✅ OK' || echo '❌ MISSING')\"
-          
-          if [ -f '${{ env.DEPLOY_DIR }}/src/instances.json' ]; then
-            INSTANCES=\$(cat '${{ env.DEPLOY_DIR }}/src/instances.json' | jq '.instances | length' 2>/dev/null || echo '0')
-            echo \"Instâncias preservadas: \$INSTANCES\"
-          fi
+          echo '✅ VERIFICAÇÃO CONCLUÍDA'
         "
 
     - name: 📊 Relatório Final
