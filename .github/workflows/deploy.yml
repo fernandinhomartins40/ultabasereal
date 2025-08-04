@@ -24,7 +24,7 @@ jobs:
   deploy:
     name: 🚀 Deploy
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     
     steps:
     - name: 📋 Informações do Deploy
@@ -548,9 +548,17 @@ jobs:
           pm2 save
           
           echo '⏳ Aguardando estabilização...'
-          sleep 15
           
-          # Verificar se ficou online
+          # Verificar se ficou online com retry mais rápido
+          for i in {1..10}; do
+            if pm2 list | grep -q 'supabase-manager.*online'; then
+              echo "✅ Aplicação online após ${i} tentativas"
+              break
+            fi
+            echo "⏳ Tentativa $i/10..."
+            sleep 2
+          done
+          
           if pm2 list | grep -q 'supabase-manager.*online'; then
             echo '✅ Aplicação iniciada com sucesso'
             pm2 status supabase-manager

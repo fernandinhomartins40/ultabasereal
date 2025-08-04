@@ -4696,28 +4696,10 @@ async function startServer() {
   let dockerAvailable = false;
   
   try {
-    // Verificar se Docker está disponível
-    try {
-      await docker.ping();
-      dockerAvailable = true;
-      console.log('✅ Docker conectado com sucesso');
-    } catch (dockerError) {
-      console.warn('⚠️  Docker não está disponível:', dockerError.message);
-      console.warn('⚠️  O servidor iniciará em modo limitado (apenas visualização)');
-    }
-
-    // Verificar se diretório docker existe
-    if (!await fs.pathExists(CONFIG.DOCKER_DIR)) {
-      console.warn(`⚠️  Diretório Docker não encontrado: ${CONFIG.DOCKER_DIR}`);
-      console.warn('⚠️  Funcionalidade de criação de instâncias será limitada');
-    } else {
-      console.log('✅ Diretório Docker encontrado');
-    }
-
-    // Iniciar servidor para aceitar conexões externas
-    app.listen(PORT, '0.0.0.0', () => {
+    // Iniciar servidor IMEDIATAMENTE para responder rapidamente
+    const server = app.listen(PORT, '0.0.0.0', () => {
       console.log(`
-🚀 SUPABASE INSTANCE MANAGER
+🚀 SUPABASE INSTANCE MANAGER - INICIADO
    
    🌐 Domínio Principal: https://${DOMAIN_CONFIG.primary}
    🏠 Landing Page: http://localhost:${PORT}
@@ -4725,17 +4707,36 @@ async function startServer() {
    🔑 Login: http://localhost:${PORT}/login
    🔗 API: https://${DOMAIN_CONFIG.primary}/api
    
-   Docker Status: ${dockerAvailable ? '✅ Conectado' : '❌ Indisponível'}
+   Status: ✅ ONLINE
    Instâncias salvas: ${Object.keys(manager.instances).length}
-   Portas disponíveis: ${Object.values(CONFIG.PORT_RANGE).reduce((acc, range) => acc + (range.max - range.min + 1), 0)}
-   
-   🌍 Domínios aceitos:
-   • ${DOMAIN_CONFIG.primary} (principal)
-   • ${DOMAIN_CONFIG.alternatives.join('\n   • ')}
-   
-   ${dockerAvailable ? 'Pronto para criar projetos Supabase! 🎉' : 'Inicie o Docker para criar novos projetos 🐳'}
       `);
+      
+      // Verificar Docker em background (não bloqueia startup)
+      checkDockerInBackground();
     });
+
+    async function checkDockerInBackground() {
+      try {
+        const timeout = new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Docker check timeout')), 5000)
+        );
+        
+        await Promise.race([docker.ping(), timeout]);
+        dockerAvailable = true;
+        console.log('✅ Docker conectado - Funcionalidade completa disponível');
+      } catch (dockerError) {
+        console.warn('⚠️  Docker não disponível - Modo somente leitura');
+      }
+      
+      // Verificar diretório docker se necessário
+      try {
+        if (dockerAvailable && !await fs.pathExists(CONFIG.DOCKER_DIR)) {
+          console.warn(`⚠️  Diretório Docker não encontrado: ${CONFIG.DOCKER_DIR}`);
+        }
+      } catch (err) {
+        // Ignorar erros de verificação de diretório
+      }
+    }
 
   } catch (error) {
     console.error('❌ Erro ao inicializar servidor:', error.message);
