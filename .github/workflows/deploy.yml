@@ -331,7 +331,7 @@ jobs:
           # Clone ou pull
           if [ ! -d .git ]; then
             echo '🆕 Clonando repositório...'
-            git clone https://github.com/fernandinhomartins40/recultrabase.git .
+            git clone https://github.com/fernandinhomartins40/ultabasereal.git .
           else
             echo '📥 Atualizando repositório...'
             git fetch origin
