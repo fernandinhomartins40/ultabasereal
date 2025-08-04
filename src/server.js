@@ -1879,16 +1879,22 @@ class SupabaseInstanceManager {
       console.log(`🔧 Executando generate.bash para instância ${instance.id}...`);
       console.log(`📁 Diretório: ${dockerDir}`);
       
+      // Broadcast progresso detalhado
+      this.broadcastProgress('📥 Baixando imagens Docker...', 65);
+      
       // CORREÇÃO FASE 3: Executar script com retry automático
       const command = `cd "${dockerDir}" && bash generate.bash`;
       
       const { stdout, stderr } = await this.executeWithRetry(async () => {
         return await execAsync(command, {
-          timeout: 900000, // 15 minutos
+          timeout: 300000, // 5 minutos (reduzido de 15)
           maxBuffer: 1024 * 1024 * 10, // 10MB buffer
           env: { ...process.env, ...scriptEnv }
         });
-      }, `Execução do script generate.bash para instância ${instance.id}`, 3, 10000);
+      }, `Execução do script generate.bash para instância ${instance.id}`, 2, 5000); // Reduzido retries
+      
+      // Progresso após execução do script
+      this.broadcastProgress('🔧 Configurando containers...', 75);
       
       console.log('📋 Script output:', stdout);
       if (stderr) {
@@ -1914,7 +1920,11 @@ class SupabaseInstanceManager {
       
       console.log(`✅ Generate.bash executado com sucesso para instância ${instance.id}`);
       
+      // Progresso final do script
+      this.broadcastProgress('🔍 Verificando arquivos criados...', 85);
+      
     } catch (error) {
+      this.broadcastProgress(`❌ Erro no script: ${error.message}`, 0);
       throw new Error(`Erro ao executar generate.bash: ${error.message}`);
     }
   }
