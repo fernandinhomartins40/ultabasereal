@@ -28,22 +28,31 @@ const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const net = require('net');
 
-// CORREÇÃO FASE 4: Logging estruturado
-const logger = require('./utils/logger');
+// CORREÇÃO FASE 4: Logging estruturado (temporariamente desabilitado)
+// const logger = require('./utils/logger');
+const logger = {
+  info: console.log,
+  error: console.error,
+  warn: console.warn,
+  debug: console.log,
+  instance: (id, msg, meta) => console.log(`[${id}] ${msg}`, meta),
+  instanceError: (id, msg, err, meta) => console.error(`[${id}] ${msg}`, err, meta),
+  instanceDebug: (id, msg, meta) => console.log(`[${id}] ${msg}`, meta)
+};
 
-// Importar sistema de diagnóstico
-const HealthChecker = require('./diagnostics/health-checker');
-const LogAnalyzer = require('./diagnostics/log-analyzer');
-const DiagnosticHistory = require('./diagnostics/diagnostic-history');
-const ScheduledDiagnostics = require('./diagnostics/scheduled-diagnostics');
+// Importar sistema de diagnóstico (temporariamente desabilitado)
+// const HealthChecker = require('./diagnostics/health-checker');
+// const LogAnalyzer = require('./diagnostics/log-analyzer');
+// const DiagnosticHistory = require('./diagnostics/diagnostic-history');
+// const ScheduledDiagnostics = require('./diagnostics/scheduled-diagnostics');
 
-// Importar sistema de gerenciamento seguro
-const SafeInstanceManager = require('./management/safe-manager');
-const ConfigEditor = require('./management/config-editor');
-const BackupSystem = require('./management/backup-system');
+// Importar sistema de gerenciamento seguro (temporariamente desabilitado)
+// const SafeInstanceManager = require('./management/safe-manager');
+// const ConfigEditor = require('./management/config-editor');
+// const BackupSystem = require('./management/backup-system');
 
-// Importar sistema de auto-correção
-const RepairAPI = require('./diagnostics/interfaces/repair-api');
+// Importar sistema de auto-correção (temporariamente desabilitado)
+// const RepairAPI = require('./diagnostics/interfaces/repair-api');
 
 const execAsync = promisify(exec);
 const docker = new Docker();
